@@ -1,0 +1,12 @@
+# Optional Conda environment for Klotski-Bench (developer / server convenience).
+# Usage:
+#   conda env create -f environment.yml
+#   conda activate klotskibench
+name: klotskibench
+channels:
+  - conda-forge
+dependencies:
+  - python>=3.10,<3.14
+  - pip
+  - pip:
+      - -r requirements.txt

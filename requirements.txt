@@ -1,0 +1,5 @@
+# Runtime: the benchmark and scripts use the Python 3.10+ standard library only
+# (plus the in-repo legacy engine under legacy/).
+#
+# Install for running tests and CI verification:
+pytest>=7.0.0
