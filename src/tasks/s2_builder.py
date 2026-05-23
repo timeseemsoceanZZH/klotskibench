@@ -5,13 +5,17 @@ from __future__ import annotations
 from typing import Any, Iterable, Sequence
 
 from src.core import state_adapter
-from src.generators.invalid_state_generator import generate_invalid_state_samples
+from src.generators.invalid_state_generator import (
+    PAPER_STATE_ERROR_TYPES,
+    generate_invalid_state_coverage,
+    generate_invalid_state_samples,
+)
 
 
 def build_s2_cases(
     source_states: Iterable[dict[str, Any]],
-    error_types: Sequence[str] = ("overlap", "boundary"),
-    max_invalid_per_state: int = 2,
+    error_types: Sequence[str] = PAPER_STATE_ERROR_TYPES,
+    max_invalid_per_state: int = 5,
     seed: int | None = None,
 ) -> list[dict[str, Any]]:
     """Build S2 cases for block-level error localization and typing."""
@@ -21,6 +25,26 @@ def build_s2_cases(
         max_per_state=max_invalid_per_state,
         seed=seed,
     )
+    return _cases_from_invalid_samples(invalid_samples)
+
+
+def build_s2_coverage_cases(
+    source_states: Iterable[dict[str, Any]],
+    error_types: Sequence[str] = PAPER_STATE_ERROR_TYPES,
+    seed: int | None = None,
+) -> list[dict[str, Any]]:
+    """Build S2 cases with exactly one case per paper error type."""
+    invalid_samples = generate_invalid_state_coverage(
+        source_states=source_states,
+        error_types=error_types,
+        seed=seed,
+    )
+    return _cases_from_invalid_samples(invalid_samples)
+
+
+def _cases_from_invalid_samples(
+    invalid_samples: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     cases: list[dict[str, Any]] = []
 
     for idx, sample in enumerate(invalid_samples):
@@ -44,4 +68,5 @@ def build_s2_cases(
 
 __all__ = [
     "build_s2_cases",
+    "build_s2_coverage_cases",
 ]

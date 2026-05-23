@@ -45,8 +45,9 @@ from src.metrics import (  # noqa: E402
 )
 from src.tasks.r1_builder import build_r1_cases  # noqa: E402
 from src.tasks.r2_builder import build_r2_cases  # noqa: E402
-from src.tasks.s1_builder import build_s1_cases  # noqa: E402
-from src.tasks.s2_builder import build_s2_cases  # noqa: E402
+from src.generators.invalid_state_generator import PAPER_STATE_ERROR_TYPES  # noqa: E402
+from src.tasks.s1_builder import build_s1_validation_sample  # noqa: E402
+from src.tasks.s2_builder import build_s2_coverage_cases  # noqa: E402
 from src.tasks.t1_builder import build_t1_cases  # noqa: E402
 from src.tasks.t2_builder import build_t2_cases  # noqa: E402
 from src.tasks.t3_builder import build_t3_cases, V1_INVALID_REASONS  # noqa: E402
@@ -123,19 +124,25 @@ def _fclose(a: float, b: float) -> bool:
 
 
 def _check_s1(
-    items: list[dict[str, Any]], exact_cases: list, report: Report
+    items: list[dict[str, Any]], _exact_cases: list, report: Report
 ) -> None:
-    cases = build_s1_cases(items, seed=42)[:5]
+    cases = build_s1_validation_sample(items, seed=42)
     if not cases or any(c.get("task") != "s1" for c in cases):
         report.rows.append(Row("s1", 0, False, False, False, False, "no cases or bad task"))
         return
+    labels = {c["gold"]["label"] for c in cases}
+    invalid_types = {
+        c["meta"]["error_type"]
+        for c in cases
+        if c["gold"]["label"] == "invalid" and "error_type" in c.get("meta", {})
+    }
+    build_ok = "valid" in labels and invalid_types >= set(PAPER_STATE_ERROR_TYPES)
     o = [{"label": c["gold"]["label"]} for c in cases]
     w = []
     for c in cases:
         w.append({"label": "invalid" if c["gold"]["label"] == "valid" else "valid"})
     mo = s1_metrics.compute_s1_metrics(cases, o)
     mw = s1_metrics.compute_s1_metrics(cases, w)
-    build_ok = True
     oracle_ok = _fclose(mo["accuracy"], 1.0)
     wrong_degrades = mo["accuracy"] > mw["accuracy"] and not _fclose(mw["accuracy"], mo["accuracy"])
     e2e_ok = True
@@ -144,24 +151,30 @@ def _check_s1(
     except Exception as e:  # noqa: BLE001
         e2e_ok = False
         report.error = f"s1 e2e: {e!r}" if not report.error else report.error
-    d = f"acc_oracle={mo['accuracy']:.2f} acc_wrong={mw['accuracy']:.2f}"
+    d = (
+        f"acc_oracle={mo['accuracy']:.2f} acc_wrong={mw['accuracy']:.2f} "
+        f"invalid_types={len(invalid_types)}/{len(PAPER_STATE_ERROR_TYPES)}"
+    )
     if not (oracle_ok and wrong_degrades):
         d += " [CHECK: oracle=1, wrong<oracle]"
-    report.rows.append(Row("s1", len(cases), build_ok, oracle_ok, wrong_degrades, e2e_ok, d))
+    report.rows.append(
+        Row("s1", len(cases), build_ok, oracle_ok, wrong_degrades, e2e_ok, d)
+    )
 
 
 def _check_s2(
     source_states: list[dict[str, Any]], report: Report
 ) -> None:
-    cases = build_s2_cases(source_states=source_states, seed=42)[:4]
+    cases = build_s2_coverage_cases(source_states=source_states, seed=42)
     if not cases:
         report.rows.append(Row("s2", 0, False, False, False, False, "no s2 cases"))
         return
+    covered_types = {c["meta"]["error_type"] for c in cases}
+    build_ok = covered_types >= set(PAPER_STATE_ERROR_TYPES)
     o = [{"errors": list(c["gold"]["errors"])} for c in cases]
     w = [{"errors": [{"block_id": "WRONG", "error_type": "boundary"}]} for c in cases]
     mo = s2_metrics.compute_s2_metrics(cases, o)
     mw = s2_metrics.compute_s2_metrics(cases, w)
-    build_ok = True
     oracle_ok = _fclose(mo["exact_error_match"], 1.0)
     wrong_degrades = mo["exact_error_match"] > mw["exact_error_match"] + 1e-6
     e2e_ok = True
@@ -178,7 +191,10 @@ def _check_s2(
             oracle_ok,
             wrong_degrades,
             e2e_ok,
-            f"eem_or={mo['exact_error_match']:.2f} eem_wr={mw['exact_error_match']:.2f}",
+            (
+                f"eem_or={mo['exact_error_match']:.2f} eem_wr={mw['exact_error_match']:.2f} "
+                f"types={len(covered_types)}/{len(PAPER_STATE_ERROR_TYPES)}"
+            ),
         )
     )
 
