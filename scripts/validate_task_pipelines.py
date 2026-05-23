@@ -50,7 +50,10 @@ from src.tasks.s1_builder import build_s1_validation_sample  # noqa: E402
 from src.tasks.s2_builder import build_s2_coverage_cases  # noqa: E402
 from src.tasks.t1_builder import build_t1_cases  # noqa: E402
 from src.tasks.t2_builder import build_t2_cases  # noqa: E402
-from src.tasks.t3_builder import build_t3_cases, V1_INVALID_REASONS  # noqa: E402
+from src.tasks.t3_builder import (  # noqa: E402
+    T3_PAPER_INVALID_REASONS,
+    build_t3_coverage_cases,
+)
 
 
 # --- tiny deterministic corpus: reverse BFS + exact-depth cases ----------------
@@ -280,13 +283,17 @@ def _check_t2(
 def _check_t3(
     items: list[dict[str, Any]], report: Report
 ) -> None:
-    reasons: tuple[str, ...] = tuple(
-        r for r in (V1_INVALID_REASONS) if r in V1_INVALID_REASONS
-    )[:2]
-    cases = build_t3_cases(items[:1], include_valid=True, invalid_reasons=reasons)[:5]
+    cases = build_t3_coverage_cases(items[:5], include_valid=True, seed=42)
     if not cases:
         report.rows.append(Row("t3", 0, False, False, False, False, "no t3 cases"))
         return
+    invalid_reasons = {
+        c["gold"]["reason"]
+        for c in cases
+        if c["gold"].get("label") == "invalid" and "reason" in c["gold"]
+    }
+    has_valid = any(c["gold"]["label"] == "valid" for c in cases)
+    build_ok = has_valid and invalid_reasons >= set(T3_PAPER_INVALID_REASONS)
     o = []
     w = []
     for c in cases:
@@ -303,7 +310,6 @@ def _check_t3(
         )
     mo = t3_metrics.compute_t3_metrics(cases, o)
     mw = t3_metrics.compute_t3_metrics(cases, w)
-    build_ok = True
     oracle_ok = _fclose(mo["label_accuracy"], 1.0) and _fclose(
         mo["joint_verification_reason_accuracy"], 1.0
     )
@@ -324,7 +330,10 @@ def _check_t3(
             oracle_ok,
             wrong_degrades,
             e2e_ok,
-            f"la_or={mo['label_accuracy']:.2f} la_wr={mw['label_accuracy']:.2f}",
+            (
+                f"la_or={mo['label_accuracy']:.2f} la_wr={mw['label_accuracy']:.2f} "
+                f"reasons={len(invalid_reasons)}/{len(T3_PAPER_INVALID_REASONS)}"
+            ),
         )
     )
 

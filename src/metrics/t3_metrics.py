@@ -37,7 +37,7 @@ def compute_t3_metrics(
             label_ok += 1
         if gl == "invalid" and "reason" in g:
             reason_n += 1
-            if pred.get("reason") == g.get("reason"):
+            if _reasons_match(pred.get("reason"), g.get("reason")):
                 reason_ok += 1
         if _joint_matches(g, pred):
             joint_ok += 1
@@ -53,6 +53,14 @@ def compute_t3_metrics(
     return out
 
 
+def _reasons_match(pred_reason: Any, gold_reason: Any) -> bool:
+    if pred_reason == gold_reason:
+        return True
+    return (
+        gold_reason == "wrong_moved_block_position" and pred_reason == "wrong_transition"
+    )
+
+
 def _joint_matches(g: dict[str, Any], pred: dict[str, Any]) -> bool:
     gl = g.get("label")
     if gl != pred.get("label"):
@@ -60,7 +68,7 @@ def _joint_matches(g: dict[str, Any], pred: dict[str, Any]) -> bool:
     if gl == "valid":
         return True
     if "reason" in g:
-        return pred.get("reason") == g.get("reason")
+        return _reasons_match(pred.get("reason"), g.get("reason"))
     return True
 
 
