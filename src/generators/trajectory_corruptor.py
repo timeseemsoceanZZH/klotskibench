@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import random
 
-V1_INVALID_TRAJECTORY_TYPES: tuple[str, ...] = (
+R2_PAPER_INVALID_TRAJECTORY_TYPES: tuple[str, ...] = (
     "wrong_action",
     "truncated_suffix",
     "extended_noise",
+    "goal_not_reached",
 )
+
+# Backward-compatible alias.
+V1_INVALID_TRAJECTORY_TYPES: tuple[str, ...] = R2_PAPER_INVALID_TRAJECTORY_TYPES
 
 
 def corrupt_trajectory(
@@ -21,6 +25,8 @@ def corrupt_trajectory(
         raise ValueError(f"Unsupported invalid trajectory type: {invalid_type}")
 
     if not actions:
+        if invalid_type == "goal_not_reached":
+            return []
         return [{"block_id": "Caocao", "direction": "up"}]
 
     corrupted = [dict(a) for a in actions]
@@ -41,6 +47,12 @@ def corrupt_trajectory(
         truncated.append({"block_id": "Caocao", "direction": "up"})
         return truncated
 
+    if invalid_type == "goal_not_reached":
+        if len(corrupted) == 1:
+            return []
+        cut = rng.randrange(1, len(corrupted))
+        return corrupted[:cut]
+
     corrupted.append({"block_id": "Caocao", "direction": "up"})
     return corrupted
 
@@ -53,6 +65,7 @@ def _different_direction(direction: str) -> str:
 
 
 __all__ = [
+    "R2_PAPER_INVALID_TRAJECTORY_TYPES",
     "V1_INVALID_TRAJECTORY_TYPES",
     "corrupt_trajectory",
 ]

@@ -128,8 +128,8 @@ def canonicalize_state(state: KlotskiState) -> CanonicalKey:
 def is_goal_state(state: KlotskiState) -> bool:
     """Solved iff the state is valid and the 2x2 Cao Cao block sits in the exit at [3,1].
 
-    Other block placements may differ; the benchmark R1 success metric still requires an
-    exact per-case :func:`canonicalize_state` match to the packaged ``meta.goal_state``.
+    Other block placements may differ; R1/R2 trajectory success uses this predicate
+    (via ``src.core.goal.is_solved_state``), not a fixed packaged layout.
     """
     s = normalize_state(state) if "blocks" not in state or "grid_size" not in state else state
     if not validate_state(s):

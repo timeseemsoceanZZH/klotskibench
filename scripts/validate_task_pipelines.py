@@ -44,7 +44,10 @@ from src.metrics import (  # noqa: E402
     t3_metrics,
 )
 from src.tasks.r1_builder import build_r1_cases  # noqa: E402
-from src.tasks.r2_builder import build_r2_cases  # noqa: E402
+from src.tasks.r2_builder import (  # noqa: E402
+    R2_PAPER_INVALID_TRAJECTORY_TYPES,
+    build_r2_coverage_cases,
+)
 from src.generators.invalid_state_generator import PAPER_STATE_ERROR_TYPES  # noqa: E402
 from src.tasks.s1_builder import build_s1_validation_sample  # noqa: E402
 from src.tasks.s2_builder import build_s2_coverage_cases  # noqa: E402
@@ -387,18 +390,20 @@ def _check_r2(
         report.rows.append(Row("r2", 0, False, False, False, False, "no exact cases for r2"))
         return
     try:
-        cases = build_r2_cases(
-            exact_cases[:3],
-            include_valid=True,
-            invalid_types=("wrong_action", "truncated_suffix"),
-            seed=0,
-        )[:5]
+        cases = build_r2_coverage_cases(exact_cases[:5], include_valid=True, seed=0)
     except Exception as e:  # noqa: BLE001
         report.rows.append(Row("r2", 0, False, False, False, False, f"build: {e!r}"))
         return
     if not cases:
         report.rows.append(Row("r2", 0, False, False, False, False, "r2: empty case list"))
         return
+    invalid_types = {
+        c["meta"]["trajectory_type"]
+        for c in cases
+        if c["gold"].get("label") == "invalid"
+    }
+    has_valid = any(c["gold"]["label"] == "valid" for c in cases)
+    build_ok = has_valid and invalid_types >= set(R2_PAPER_INVALID_TRAJECTORY_TYPES)
     o, w = [], []
     for c in cases:
         g = c["gold"]
@@ -415,7 +420,6 @@ def _check_r2(
             w.append({"label": "valid"})
     mo = r2_metrics.compute_r2_metrics(cases, o)
     mw = r2_metrics.compute_r2_metrics(cases, w)
-    build_ok = True
     oracle_ok = _fclose(mo["trajectory_verification_accuracy"], 1.0)
     wrong_degrades = mo["trajectory_verification_accuracy"] > mw["trajectory_verification_accuracy"] + 1e-6
     e2e_ok = True
@@ -431,7 +435,11 @@ def _check_r2(
             oracle_ok,
             wrong_degrades,
             e2e_ok,
-            f"lab_or={mo['trajectory_verification_accuracy']:.2f} lab_wr={mw['trajectory_verification_accuracy']:.2f}",
+            (
+                f"lab_or={mo['trajectory_verification_accuracy']:.2f} "
+                f"lab_wr={mw['trajectory_verification_accuracy']:.2f} "
+                f"invalid_types={len(invalid_types)}/{len(R2_PAPER_INVALID_TRAJECTORY_TYPES)}"
+            ),
         )
     )
 

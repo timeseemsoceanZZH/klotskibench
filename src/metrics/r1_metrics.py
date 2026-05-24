@@ -1,25 +1,11 @@
-"""Metrics for R1 trajectory-generation tasks.
-
-Benchmark decisions (frozen for this codebase):
-
-1) **R1 strict success (SR@N) — exact goal state, not "any solved"**:
-   The final state after the predicted actions must match **case["meta"]["goal_state"]**
-   by ``canonicalize_state`` equality. We do **not** use ``is_goal_state`` alone, so
-   distinct valid goal encodings that are not exactly the reference goal for that
-   case do not count as success. This matches exact-depth / oracle-goal training data.
-
-2) **TCR(t) — reference-chain correctness, not "any optimal path"**:
-   At each step t, the predicted action must match **meta["shortest_solution_actions"][t-1]**
-   (the packaged shortest path from the generator), not any alternative optimal plan.
-   There may be multiple optimal trajectories; this metric scores alignment with the
-   benchmark reference, not the full set of optimal moves.
-"""
+"""Metrics for R1 trajectory-generation tasks."""
 
 from __future__ import annotations
 
 from typing import Any, Sequence
 
 from src.core import moves_adapter, state_adapter
+from src.core.goal import is_solved_state
 
 
 def compute_r1_metrics(
@@ -29,7 +15,14 @@ def compute_r1_metrics(
     """
     Compute SR@N, Alive(t), TCR(t), and Efficiency for R1.
 
-    See module docstring for R1 success and TCR definitions.
+    Success (SR@N): simulate the full predicted trajectory; every step must be a
+    legal action on a valid state, and the final state must satisfy
+    ``is_solved_state``. Exact match to ``meta.goal_state`` is not required.
+    Legal detours (extra legal moves) can succeed if the full execution ends in G;
+    efficiency is ``optimal_depth / len(predicted_actions)`` for successful runs.
+
+    TCR(t) compares step t to the packaged shortest reference prefix.
+    Alive(t) tracks prefix legality and state validity only.
     """
     if len(cases) != len(predictions):
         raise ValueError("cases and predictions must have the same length")
@@ -48,15 +41,17 @@ def compute_r1_metrics(
 
     for case, pred in zip(cases, predictions):
         initial_state = state_adapter.normalize_state(case["input"]["initial_state"])
-        goal_state = state_adapter.normalize_state(case["meta"]["goal_state"])
         optimal_depth = int(case["gold"]["optimal_depth"])
+        step_budget_n = case.get("meta", {}).get("step_budget_n")
+        if step_budget_n is not None:
+            step_budget_n = int(step_budget_n)
         ref_actions = list(case["meta"]["shortest_solution_actions"])
         pred_actions = _extract_predicted_actions(pred)
 
         eval_out = _evaluate_predicted_trajectory(
             initial_state=initial_state,
-            goal_state=goal_state,
             optimal_depth=optimal_depth,
+            step_budget_n=step_budget_n,
             predicted_actions=pred_actions,
             reference_actions=ref_actions,
         )
@@ -79,7 +74,9 @@ def compute_r1_metrics(
                 c["ok"] += 1
 
         if eval_out["strict_success"]:
-            efficiency_values.append(float(optimal_depth) / float(eval_out["successful_length"]))
+            efficiency_values.append(
+                float(optimal_depth) / float(eval_out["successful_length"])
+            )
 
     sr_at_n = {
         depth: (counts["success"] / counts["total"] if counts["total"] else 0.0)
@@ -105,13 +102,11 @@ def compute_r1_metrics(
 
 def _evaluate_predicted_trajectory(
     initial_state: state_adapter.KlotskiState,
-    goal_state: state_adapter.KlotskiState,
     optimal_depth: int,
+    step_budget_n: int | None,
     predicted_actions: list[dict[str, str]],
     reference_actions: list[dict[str, str]],
 ) -> dict[str, Any]:
-    # Strict success: exact reference goal (canonical), not is_goal_state(final).
-    # TCR: stepwise match to reference_actions (shortest_solution_actions), not any optimal path.
     current = state_adapter.normalize_state(initial_state)
     alive_t: dict[int, bool] = {}
     tcr_t: dict[int, bool] = {}
@@ -122,7 +117,7 @@ def _evaluate_predicted_trajectory(
     for t, action in enumerate(predicted_actions, start=1):
         if alive_prefix:
             legal_actions = moves_adapter.get_legal_actions(current)
-            if action in legal_actions:
+            if _action_matches_any(action, legal_actions):
                 current = moves_adapter.apply_action(current, action)
                 alive_prefix = bool(state_adapter.validate_state(current))
             else:
@@ -133,16 +128,20 @@ def _evaluate_predicted_trajectory(
             if t > len(reference_actions):
                 tcr_prefix = False
             else:
-                tcr_prefix = action == reference_actions[t - 1]
+                tcr_prefix = _action_matches_any(action, [reference_actions[t - 1]])
         tcr_t[t] = tcr_prefix
 
-    final_is_goal = (
-        state_adapter.canonicalize_state(current)
-        == state_adapter.canonicalize_state(goal_state)
+    within_budget = (
+        len(predicted_actions) <= step_budget_n
+        if step_budget_n is not None
+        else True
     )
+    final_solved = is_solved_state(current)
     strict_success = (
-        all(alive_t.values()) if alive_t else True
-    ) and final_is_goal and (len(predicted_actions) == optimal_depth)
+        (all(alive_t.values()) if alive_t else True)
+        and final_solved
+        and within_budget
+    )
 
     return {
         "alive_t": alive_t,
@@ -150,6 +149,16 @@ def _evaluate_predicted_trajectory(
         "strict_success": strict_success,
         "successful_length": len(predicted_actions),
     }
+
+
+def _action_matches_any(
+    action: dict[str, str], legal_actions: list[dict[str, str]]
+) -> bool:
+    return any(
+        str(action.get("block_id")) == str(legal.get("block_id"))
+        and str(action.get("direction")) == str(legal.get("direction"))
+        for legal in legal_actions
+    )
 
 
 def _extract_predicted_actions(prediction: dict[str, Any]) -> list[dict[str, str]]:
