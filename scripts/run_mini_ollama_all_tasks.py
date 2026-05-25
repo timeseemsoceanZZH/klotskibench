@@ -167,6 +167,76 @@ def _normalize_prediction(task: str, obj: dict[str, Any] | None) -> dict[str, An
     return _empty_prediction(task)
 
 
+T2_SAFE_NEXT_STATE: dict[str, Any] = {"grid_size": [5, 4], "blocks": {}}
+
+
+def _t2_next_state_is_eval_safe(next_state: Any) -> bool:
+    return (
+        isinstance(next_state, dict)
+        and "grid_size" in next_state
+        and "blocks" in next_state
+        and isinstance(next_state.get("blocks"), dict)
+    )
+
+
+def sanitize_prediction_for_task(
+    task: str,
+    prediction: dict[str, Any],
+) -> tuple[dict[str, Any], bool]:
+    """Return a prediction shape safe for the existing evaluator (may count as wrong)."""
+    if task == "s1":
+        if prediction.get("label") in ("valid", "invalid"):
+            return prediction, False
+        return {"label": "__invalid_prediction__"}, True
+
+    if task == "s2":
+        if isinstance(prediction.get("errors"), list):
+            return prediction, False
+        return {"errors": []}, True
+
+    if task == "t1":
+        if isinstance(prediction.get("legal_actions"), list):
+            return prediction, False
+        return {"legal_actions": []}, True
+
+    if task == "t2":
+        next_state = prediction.get("next_state")
+        if _t2_next_state_is_eval_safe(next_state):
+            return prediction, False
+        return {"next_state": dict(T2_SAFE_NEXT_STATE)}, True
+
+    if task == "t3":
+        label = prediction.get("label")
+        if label in ("valid", "invalid"):
+            return prediction, False
+        return {
+            "label": "__invalid_prediction__",
+            "reason": "__invalid_prediction__",
+        }, True
+
+    if task == "r1":
+        if isinstance(prediction.get("predicted_trajectory"), list):
+            return prediction, False
+        return {"predicted_trajectory": []}, True
+
+    if task == "r2":
+        label = prediction.get("label")
+        if label == "valid":
+            return prediction, False
+        if label == "invalid":
+            has_step = isinstance(prediction.get("step_validity_sequence"), list)
+            has_first = "first_error_step" in prediction
+            if has_step and has_first:
+                return prediction, False
+        return {
+            "label": "__invalid_prediction__",
+            "first_error_step": 0,
+            "step_validity_sequence": [],
+        }, True
+
+    return prediction, False
+
+
 def _empty_prediction(task: str) -> dict[str, Any]:
     if task == "s1":
         return {"label": "valid"}
@@ -263,8 +333,9 @@ Task: From current_state, list the complete unordered set of legal primitive mov
 Each move is one block moved one cell in one direction.
 Output JSON only with every legal action (block_id + direction).""",
     "t2": """\
-Task: Apply the given legal action to current_state and predict the full successor state.
-Use the same block representation as the input (blocks map + grid_size).
+Task: Apply the given legal action to current_state and predict the complete full next_state.
+The next_state must include "grid_size": [5, 4] and all blocks (not only the moved block).
+Each block must include shape and pos; unchanged blocks keep the same id, shape, and position.
 Output JSON only with the resulting next_state.""",
     "t3": """\
 Task: Verify whether candidate_next_state exactly matches the simulator-defined result of applying action to current_state.
@@ -504,18 +575,20 @@ def run_benchmark(args: argparse.Namespace) -> int:
             parse_error = json_err
 
         prediction = _normalize_prediction(task, obj)
-        raw_rows.append(
-            {
-                "index": index,
-                "case_id": case_id,
-                "task": task,
-                "model": args.model,
-                "raw_response": raw,
-                "parsed_object": obj,
-                "prediction": prediction,
-                "parse_error": parse_error,
-            }
-        )
+        prediction, sanitized = sanitize_prediction_for_task(task, prediction)
+        row: dict[str, Any] = {
+            "index": index,
+            "case_id": case_id,
+            "task": task,
+            "model": args.model,
+            "raw_response": raw,
+            "parsed_object": obj,
+            "prediction": prediction,
+            "parse_error": parse_error,
+        }
+        if sanitized:
+            row["sanitized"] = True
+        raw_rows.append(row)
         predictions.append(prediction)
 
         if not args.dry_run and args.sleep > 0 and index + 1 < len(cases):

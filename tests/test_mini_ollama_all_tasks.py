@@ -177,6 +177,57 @@ def test_ollama_chat_payload_includes_options():
     assert body_extra["options"]["num_predict"] == 128
 
 
+def _load_legacy_klotski_state():
+    import importlib.util
+
+    path = ROOT / "legacy" / "klotski_state.py"
+    spec = importlib.util.spec_from_file_location("klotski_state_real", path)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_t2_malformed_predictions_sanitized():
+    m = _import_runner()
+    legacy_state = _load_legacy_klotski_state()
+
+    missing_grid, flag_grid = m.sanitize_prediction_for_task(
+        "t2",
+        {"next_state": {"blocks": {"A": {"shape": [1, 1], "pos": [0, 0]}}}},
+    )
+    assert flag_grid is True
+    assert missing_grid == {"next_state": m.T2_SAFE_NEXT_STATE}
+
+    missing_ns, flag_ns = m.sanitize_prediction_for_task("t2", {})
+    assert flag_ns is True
+    assert missing_ns == {"next_state": m.T2_SAFE_NEXT_STATE}
+
+    with pytest.raises(KeyError):
+        legacy_state.normalize_state({"blocks": {}})
+    legacy_state.normalize_state(missing_grid["next_state"])
+
+    outputs = m.acquire_task_outputs(force_rebuild=False)
+    good_ns = dict(outputs["t2"]["cases"][0]["gold"]["next_state"])
+    good_pred, sanitized = m.sanitize_prediction_for_task(
+        "t2",
+        {"next_state": good_ns},
+    )
+    assert sanitized is False
+    assert good_pred == {"next_state": good_ns}
+
+
+def test_malformed_t2_without_grid_size_sanitized_before_eval_path():
+    m = _import_runner()
+    legacy_state = _load_legacy_klotski_state()
+    malformed = m._normalize_prediction("t2", {"next_state": {"blocks": {}}})
+    pred, sanitized = m.sanitize_prediction_for_task("t2", malformed)
+    assert sanitized is True
+    assert pred["next_state"]["grid_size"] == [5, 4]
+    assert "blocks" in pred["next_state"]
+    legacy_state.normalize_state(pred["next_state"])
+
+
 def test_dry_run_pipeline(tmp_path: Path):
     out = tmp_path / "dry_run_test"
     proc = subprocess.run(
