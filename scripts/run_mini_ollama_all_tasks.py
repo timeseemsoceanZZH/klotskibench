@@ -199,35 +199,92 @@ def dry_run_raw_response(task: str) -> str:
     return json.dumps(placeholders[task], ensure_ascii=False)
 
 
+KLOTSKI_RULES = """\
+Klotski rules (apply to all tasks below):
+- Board size is 5 rows by 4 columns.
+- Coordinates are [row, col], zero-indexed from the top-left.
+- Each block has shape [height, width] and pos [row, col] (top-left cell).
+- A primitive action moves exactly one block by one cell: up, down, left, or right.
+- A move is legal only if the moved block stays within the board and does not overlap any other block.
+- Blocks that are not moved must keep the same id, shape, and position.
+- A state is valid if all blocks are within bounds, non-overlapping, and preserve their declared identities and shapes.
+- Solved-state predicate G: the 2×2 Caocao block reaches top-left position [3, 1].\
+"""
+
+TASK_NAMES = {
+    "s1": "S1 State Validity Judgment",
+    "s2": "S2 State Error Localization",
+    "t1": "T1 Legal Action Prediction",
+    "t2": "T2 Next-State Prediction",
+    "t3": "T3 One-Step Transition Verification",
+    "r1": "R1 Trajectory Generation",
+    "r2": "R2 Trajectory Verification",
+}
+
+OUTPUT_SCHEMAS = {
+    "s1": '{"label":"valid"} OR {"label":"invalid"}',
+    "s2": '{"errors":[{"error_type":"overlap|boundary|missing_block|identity_mismatch|shape_change", ...}]}',
+    "t1": '{"legal_actions":[{"block_id":"<id>","direction":"up|down|left|right"}, ...]}',
+    "t2": '{"next_state":{"blocks":{...},"grid_size":[rows,cols]}}',
+    "t3": '{"label":"valid"} OR {"label":"invalid","reason":"overlap|boundary|stationary_object_drift|shape_change|wrong_moved_block_position"}',
+    "r1": '{"predicted_trajectory":[{"block_id":"<id>","direction":"up|down|left|right"}, ...]}',
+    "r2": (
+        '{"label":"valid"} OR {"label":"invalid","first_error_step":<int>,'
+        '"step_validity_sequence":[0|1,...]}'
+    ),
+}
+
+TASK_INSTRUCTIONS = {
+    "s1": """\
+Task: Decide whether the given state is valid.
+Check: in-bounds, no overlap, no missing block, no identity mismatch, no shape change.
+Output JSON only with label "valid" or "invalid".""",
+    "s2": """\
+Task: Localize all state errors in the given state.
+Report every error using error_type among: overlap, boundary, missing_block, identity_mismatch, shape_change.
+Output JSON only with an "errors" list (empty if the state is fully valid).""",
+    "t1": """\
+Task: From current_state, list the complete unordered set of legal primitive moves.
+Each move is one block moved one cell in one direction.
+Output JSON only with every legal action (block_id + direction).""",
+    "t2": """\
+Task: Apply the given legal action to current_state and predict the full successor state.
+Use the same block representation as the input (blocks map + grid_size).
+Output JSON only with the resulting next_state.""",
+    "t3": """\
+Task: Verify whether candidate_next_state exactly matches the simulator-defined result of applying action to current_state.
+If invalid, give one reason: overlap, boundary, stationary_object_drift, shape_change, or wrong_moved_block_position.
+Output JSON only with label "valid", or label "invalid" plus reason.""",
+    "r1": """\
+Task: Given initial_state, generate a complete sequence of primitive actions.
+The sequence should solve the puzzle by reaching a state in G (Caocao 2×2 at [3, 1]).
+Legal detours are allowed, but the final state after executing the complete sequence must be solved.
+Output JSON only:
+{"predicted_trajectory":[{"block_id":"<id>","direction":"up|down|left|right"}, ...]}""",
+    "r2": """\
+Task: Given initial_state and candidate_trajectory, judge whether the complete trajectory is valid.
+Valid only if every action is legal, every intermediate state is valid, and the final state satisfies G.
+The trajectory does not need to be shortest.
+If all steps are legal but the final state is not solved, output invalid.
+Output JSON only using the required schema (include first_error_step and step_validity_sequence when invalid).""",
+}
+
+PROMPT_LEAKAGE_TERMS = (
+    "gold",
+    "optimal_depth",
+    "shortest_solution_actions",
+)
+
+
 def build_prompt(case: dict[str, Any]) -> str:
     task = str(case["task"])
     payload = json.dumps(jsonable(case.get("input", {})), ensure_ascii=False, indent=2)
-
-    schemas = {
-        "s1": '{"label":"valid"} OR {"label":"invalid"}',
-        "s2": '{"errors":[{"error_type":"overlap|boundary|missing_block|identity_mismatch|shape_change", ...}]}',
-        "t1": '{"legal_actions":[{"block_id":"<id>","direction":"up|down|left|right"}, ...]}',
-        "t2": '{"next_state":{"blocks":{...},"grid_size":[rows,cols]}}',
-        "t3": '{"label":"valid"} OR {"label":"invalid","reason":"overlap|boundary|stationary_object_drift|shape_change|wrong_moved_block_position"}',
-        "r1": '{"predicted_trajectory":[{"block_id":"<id>","direction":"up|down|left|right"}, ...]}',
-        "r2": (
-            '{"label":"valid"} OR {"label":"invalid","first_error_step":<int>,'
-            '"step_validity_sequence":[0|1,...]}'
-        ),
-    }
-    names = {
-        "s1": "S1 State Validity Judgment",
-        "s2": "S2 State Error Localization",
-        "t1": "T1 Legal Action Prediction",
-        "t2": "T2 Next-State Prediction",
-        "t3": "T3 One-Step Transition Verification",
-        "r1": "R1 Trajectory Generation",
-        "r2": "R2 Trajectory Verification",
-    }
     return (
-        f"You are solving Klotski-Bench task {task.upper()} ({names[task]}).\n"
-        "Read the input JSON and respond with JSON only (no markdown, no commentary).\n"
-        f"Required output schema: {schemas[task]}\n\n"
+        f"You are solving Klotski-Bench task {task.upper()} ({TASK_NAMES[task]}).\n\n"
+        f"{KLOTSKI_RULES}\n\n"
+        f"{TASK_INSTRUCTIONS[task]}\n\n"
+        "Respond with JSON only (no markdown fences, no commentary).\n"
+        f"Required output schema: {OUTPUT_SCHEMAS[task]}\n\n"
         f"Input JSON:\n{payload}\n"
     )
 

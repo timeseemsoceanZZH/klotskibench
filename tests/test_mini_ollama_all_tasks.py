@@ -55,6 +55,60 @@ def test_normalize_r2_invalid_prediction():
     assert pred["first_error_step"] == 3
 
 
+def test_prompts_include_klotski_rules_and_r1_goal():
+    m = _import_runner()
+    case = {
+        "task": "r1",
+        "input": {
+            "initial_state": {
+                "blocks": {"CaoCao": {"shape": [2, 2], "pos": [0, 1]}},
+                "grid_size": [5, 4],
+            }
+        },
+        "gold": {"optimal_depth": 42},
+        "meta": {"shortest_solution_actions": [{"block_id": "SECRET", "direction": "up"}]},
+    }
+    prompt = m.build_prompt(case)
+    assert "5 rows by 4 columns" in prompt
+    assert "[3, 1]" in prompt
+    assert "reaching a state in G" in prompt
+    assert "legal detours" in prompt.lower()
+    assert "predicted_trajectory" in prompt
+    assert "SECRET" not in prompt
+    for term in m.PROMPT_LEAKAGE_TERMS:
+        assert term not in prompt.lower()
+    assert '"meta"' not in prompt
+
+
+def test_prompts_no_oracle_leakage():
+    m = _import_runner()
+    outputs = m.acquire_task_outputs(force_rebuild=False)
+    cases, _ = m.select_cases(outputs, m.ALL_TASKS, None)
+    assert cases, "expected validation cases"
+    for case in cases:
+        poisoned = {
+            **case,
+            "gold": {
+                "optimal_depth": 999,
+                "shortest_solution_actions": [{"block_id": "LEAK", "direction": "up"}],
+                "label": "invalid",
+            },
+            "meta": {
+                "optimal_depth": 999,
+                "shortest_solution_actions": [{"block_id": "LEAK", "direction": "up"}],
+                "goal_state": {"blocks": {}, "grid_size": [5, 4]},
+            },
+        }
+        prompt = m.build_prompt(poisoned)
+        lower = prompt.lower()
+        for term in m.PROMPT_LEAKAGE_TERMS:
+            assert term not in lower, f"{case['task']}: prompt contains {term!r}"
+        assert '"meta"' not in prompt
+        assert " meta" not in lower and "meta " not in lower
+        assert "LEAK" not in prompt
+        assert "999" not in prompt
+
+
 def test_dry_run_pipeline(tmp_path: Path):
     out = tmp_path / "dry_run_test"
     proc = subprocess.run(
