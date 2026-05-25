@@ -80,6 +80,30 @@ def test_prompts_include_klotski_rules_and_r1_goal():
     assert '"meta"' not in prompt
 
 
+def test_s2_prompt_requires_localization_fields():
+    m = _import_runner()
+    prompt = m.build_prompt({"task": "s2", "input": {"state": {"blocks": {}, "grid_size": [5, 4]}}})
+    assert "Do not output only error_type" in prompt
+    for field in ("block_ids", "cells", "block_id", "missing_block_id"):
+        assert field in prompt
+
+
+def test_r2_prompt_first_error_step_convention():
+    m = _import_runner()
+    prompt = m.build_prompt(
+        {
+            "task": "r2",
+            "input": {
+                "initial_state": {"blocks": {}, "grid_size": [5, 4]},
+                "candidate_trajectory": [],
+            },
+        }
+    )
+    assert "first_error_step is 1-indexed" in prompt
+    assert "first 0 in step_validity_sequence" in prompt
+    assert "len(candidate_trajectory) + 1" in prompt
+
+
 def test_prompts_no_oracle_leakage():
     m = _import_runner()
     outputs = m.acquire_task_outputs(force_rebuild=False)

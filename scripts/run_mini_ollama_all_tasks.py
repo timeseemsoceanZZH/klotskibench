@@ -241,8 +241,23 @@ Check: in-bounds, no overlap, no missing block, no identity mismatch, no shape c
 Output JSON only with label "valid" or "invalid".""",
     "s2": """\
 Task: Localize all state errors in the given state.
-Report every error using error_type among: overlap, boundary, missing_block, identity_mismatch, shape_change.
-Output JSON only with an "errors" list (empty if the state is fully valid).""",
+For S2: Do not output only error_type. You must include localization fields required by the error type.
+
+Required fields:
+- overlap:
+  {"error_type": "overlap", "block_ids": ["<id1>", "<id2>"], "cells": [[row, col], ...]}
+- boundary:
+  {"error_type": "boundary", "block_id": "<id>", "cells": [[row, col], ...]}
+- missing_block:
+  {"error_type": "missing_block", "missing_block_id": "<id>", "block_id": "<id>"}
+- shape_change:
+  {"error_type": "shape_change", "block_id": "<id>"}
+- identity_mismatch:
+  {"error_type": "identity_mismatch", "block_id": "<id>"}
+
+If multiple errors are present, output all detected errors in the errors list.
+If the state is invalid, errors must not be empty.
+Output JSON only with an "errors" list (empty only if the state is fully valid).""",
     "t1": """\
 Task: From current_state, list the complete unordered set of legal primitive moves.
 Each move is one block moved one cell in one direction.
@@ -265,8 +280,22 @@ Output JSON only:
 Task: Given initial_state and candidate_trajectory, judge whether the complete trajectory is valid.
 Valid only if every action is legal, every intermediate state is valid, and the final state satisfies G.
 The trajectory does not need to be shortest.
-If all steps are legal but the final state is not solved, output invalid.
-Output JSON only using the required schema (include first_error_step and step_validity_sequence when invalid).""",
+
+For R2:
+- step_validity_sequence is a list of 1/0 values, one value per candidate action.
+- 1 means the corresponding step is valid; 0 means the corresponding step is invalid.
+- first_error_step is 1-indexed.
+- first_error_step must be the index of the first 0 in step_validity_sequence.
+- Example: if step_validity_sequence is [1, 0], then first_error_step must be 2.
+- Example: if step_validity_sequence is [1, 1, 0], then first_error_step must be 3.
+- If all action steps are valid but the final state is not solved, then:
+  first_error_step = len(candidate_trajectory) + 1
+  step_validity_sequence = [1] * len(candidate_trajectory)
+- If the trajectory is valid, output only: {"label": "valid"}
+- If invalid, output:
+  {"label": "invalid", "first_error_step": <int>, "step_validity_sequence": [...]}
+
+Output JSON only.""",
 }
 
 PROMPT_LEAKAGE_TERMS = (
