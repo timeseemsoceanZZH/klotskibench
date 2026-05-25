@@ -305,6 +305,106 @@ PROMPT_LEAKAGE_TERMS = (
 )
 
 
+def build_ollama_options(
+    temperature: float = 0.0,
+    seed: int = 42,
+    top_p: float | None = None,
+    num_predict: int | None = None,
+) -> dict[str, Any]:
+    """Build Ollama ``options`` for deterministic decoding."""
+    opts: dict[str, Any] = {"temperature": temperature, "seed": seed}
+    if top_p is not None:
+        opts["top_p"] = top_p
+    if num_predict is not None:
+        opts["num_predict"] = num_predict
+    return opts
+
+
+def decoding_settings_from_args(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "temperature": args.temperature,
+        "seed": args.seed,
+        "top_p": args.top_p,
+        "num_predict": args.num_predict,
+    }
+
+
+def configure_parser(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--model", default="qwen3:4b", help="Ollama model name")
+    parser.add_argument(
+        "--ollama-base",
+        default="http://127.0.0.1:11434",
+        help="Ollama HTTP base URL",
+    )
+    parser.add_argument(
+        "--out-dir",
+        type=Path,
+        default=None,
+        help="Output directory (default: output/mini_all_tasks/run_<model_slug>)",
+    )
+    parser.add_argument(
+        "--tasks",
+        default=",".join(ALL_TASKS),
+        help="Comma-separated task ids (default: all seven)",
+    )
+    parser.add_argument(
+        "--max-cases-per-task",
+        type=int,
+        default=None,
+        help="Limit cases per task",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Skip Ollama HTTP; write placeholder predictions and still evaluate",
+    )
+    parser.add_argument(
+        "--sleep",
+        type=float,
+        default=0.0,
+        help="Seconds to sleep between Ollama calls",
+    )
+    parser.add_argument(
+        "--force-rebuild",
+        action="store_true",
+        help="Rebuild cases via export builder instead of loading all_cases.json",
+    )
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=0.0,
+        help="Ollama sampling temperature (default: 0.0)",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Ollama random seed (default: 42)",
+    )
+    parser.add_argument(
+        "--top-p",
+        dest="top_p",
+        type=float,
+        default=None,
+        help="Optional Ollama top_p (included in request only when set)",
+    )
+    parser.add_argument(
+        "--num-predict",
+        dest="num_predict",
+        type=int,
+        default=None,
+        help="Optional Ollama num_predict (included in request only when set)",
+    )
+
+
+def parse_runner_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run Ollama on the seven-task Klotski-Bench mini validation set.",
+    )
+    configure_parser(parser)
+    return parser.parse_args(argv)
+
+
 def build_prompt(case: dict[str, Any]) -> str:
     task = str(case["task"])
     payload = json.dumps(jsonable(case.get("input", {})), ensure_ascii=False, indent=2)
@@ -370,6 +470,13 @@ def run_benchmark(args: argparse.Namespace) -> int:
 
     raw_rows: list[dict[str, Any]] = []
     predictions: list[dict[str, Any]] = []
+    ollama_options = build_ollama_options(
+        temperature=args.temperature,
+        seed=args.seed,
+        top_p=args.top_p,
+        num_predict=args.num_predict,
+    )
+    decoding_settings = decoding_settings_from_args(args)
 
     for index, case in enumerate(cases):
         task = str(case["task"])
@@ -381,7 +488,12 @@ def run_benchmark(args: argparse.Namespace) -> int:
             parse_error = None
         else:
             try:
-                raw = ollama_chat(args.ollama_base, args.model, prompt)
+                raw = ollama_chat(
+                    args.ollama_base,
+                    args.model,
+                    prompt,
+                    options=ollama_options,
+                )
                 parse_error = None
             except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
                 raw = f"[error: {exc!r}]"
@@ -468,6 +580,7 @@ def run_benchmark(args: argparse.Namespace) -> int:
         "force_rebuild_cases": args.force_rebuild,
         "max_cases_per_task": args.max_cases_per_task,
         "sleep_seconds": args.sleep,
+        **decoding_settings,
     })
     write_json(f"main_task_table_{slug}.json", table_rows)
     (out_dir / f"summary_{slug}.md").write_text("\n".join(md_lines) + "\n", encoding="utf-8")
@@ -478,49 +591,7 @@ def run_benchmark(args: argparse.Namespace) -> int:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Run Ollama on the seven-task Klotski-Bench mini validation set.",
-    )
-    parser.add_argument("--model", default="qwen3:4b", help="Ollama model name")
-    parser.add_argument(
-        "--ollama-base",
-        default="http://127.0.0.1:11434",
-        help="Ollama HTTP base URL",
-    )
-    parser.add_argument(
-        "--out-dir",
-        type=Path,
-        default=None,
-        help="Output directory (default: output/mini_all_tasks/run_<model_slug>)",
-    )
-    parser.add_argument(
-        "--tasks",
-        default=",".join(ALL_TASKS),
-        help="Comma-separated task ids (default: all seven)",
-    )
-    parser.add_argument(
-        "--max-cases-per-task",
-        type=int,
-        default=None,
-        help="Limit cases per task",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Skip Ollama HTTP; write placeholder predictions and still evaluate",
-    )
-    parser.add_argument(
-        "--sleep",
-        type=float,
-        default=0.0,
-        help="Seconds to sleep between Ollama calls",
-    )
-    parser.add_argument(
-        "--force-rebuild",
-        action="store_true",
-        help="Rebuild cases via export builder instead of loading all_cases.json",
-    )
-    args = parser.parse_args()
+    args = parse_runner_args()
     raise SystemExit(run_benchmark(args))
 
 

@@ -40,14 +40,32 @@ def ollama_tags(ollama_base: str) -> dict[str, Any]:
         return json.loads(r.read().decode("utf-8"))
 
 
-def ollama_chat(ollama_base: str, model: str, user: str) -> str:
+def build_ollama_chat_request_body(
+    model: str,
+    user: str,
+    *,
+    options: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    body: dict[str, Any] = {
+        "model": model,
+        "messages": [{"role": "user", "content": user}],
+        "stream": False,
+    }
+    if options:
+        body["options"] = options
+    return body
+
+
+def ollama_chat(
+    ollama_base: str,
+    model: str,
+    user: str,
+    *,
+    options: dict[str, Any] | None = None,
+) -> str:
     base = ollama_base.rstrip("/")
     body = json.dumps(
-        {
-            "model": model,
-            "messages": [{"role": "user", "content": user}],
-            "stream": False,
-        }
+        build_ollama_chat_request_body(model, user, options=options)
     ).encode("utf-8")
     req = urllib.request.Request(
         f"{base}/api/chat",

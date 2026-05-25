@@ -133,6 +133,50 @@ def test_prompts_no_oracle_leakage():
         assert "999" not in prompt
 
 
+def test_cli_default_decoding_options():
+    m = _import_runner()
+    args = m.parse_runner_args([])
+    assert args.temperature == 0.0
+    assert args.seed == 42
+    assert args.top_p is None
+    assert args.num_predict is None
+
+
+def test_build_ollama_options_defaults_and_optional():
+    m = _import_runner()
+    opts = m.build_ollama_options()
+    assert opts == {"temperature": 0.0, "seed": 42}
+    assert "top_p" not in opts
+    assert "num_predict" not in opts
+
+    opts_full = m.build_ollama_options(temperature=0.1, seed=7, top_p=0.9, num_predict=256)
+    assert opts_full["temperature"] == 0.1
+    assert opts_full["seed"] == 7
+    assert opts_full["top_p"] == 0.9
+    assert opts_full["num_predict"] == 256
+
+
+def test_ollama_chat_payload_includes_options():
+    m = _import_runner()
+    import mini_bench_run_ollama as ollama  # noqa: WPS433
+
+    opts = m.build_ollama_options()
+    body = ollama.build_ollama_chat_request_body("qwen3:4b", "hello", options=opts)
+    assert body["options"]["temperature"] == 0.0
+    assert body["options"]["seed"] == 42
+
+    body_minimal = ollama.build_ollama_chat_request_body("m", "hi", options=None)
+    assert "options" not in body_minimal
+
+    body_extra = ollama.build_ollama_chat_request_body(
+        "m",
+        "hi",
+        options=m.build_ollama_options(top_p=0.95, num_predict=128),
+    )
+    assert body_extra["options"]["top_p"] == 0.95
+    assert body_extra["options"]["num_predict"] == 128
+
+
 def test_dry_run_pipeline(tmp_path: Path):
     out = tmp_path / "dry_run_test"
     proc = subprocess.run(
@@ -160,3 +204,7 @@ def test_dry_run_pipeline(tmp_path: Path):
     meta = json.loads(cases_path.read_text(encoding="utf-8"))
     assert len(preds["predictions"]) == meta["n_cases"]
     assert meta["dry_run"] is True
+    assert meta["temperature"] == 0.0
+    assert meta["seed"] == 42
+    assert meta["top_p"] is None
+    assert meta["num_predict"] is None
