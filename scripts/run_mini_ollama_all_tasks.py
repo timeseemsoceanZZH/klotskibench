@@ -466,6 +466,17 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Optional Ollama num_predict (included in request only when set)",
     )
+    parser.add_argument(
+        "--case-root",
+        dest="case_root",
+        type=Path,
+        default=None,
+        help=(
+            "Load cases from a depth-benchmark directory produced by "
+            "scripts/export_depth_benchmark.py. Expects <case-root>/<task>/cases.json "
+            "for each task. Overrides --force-rebuild and the default all_cases.json path."
+        ),
+    )
 
 
 def parse_runner_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -489,8 +500,37 @@ def build_prompt(case: dict[str, Any]) -> str:
     )
 
 
-def acquire_task_outputs(force_rebuild: bool) -> dict[str, dict[str, Any]]:
-    """Build cases or load from output/seven_task_validation if present."""
+def _load_from_case_root(case_root: Path) -> dict[str, dict[str, Any]]:
+    """Load per-task cases.json files from a depth-benchmark export directory."""
+    result: dict[str, dict[str, Any]] = {}
+    for task in ALL_TASKS:
+        task_file = case_root / task / "cases.json"
+        if task_file.is_file():
+            cases = json.loads(task_file.read_text(encoding="utf-8"))
+            if not isinstance(cases, list):
+                print(
+                    f"Warning: {task_file} is not a JSON list; skipping task {task}.",
+                    file=__import__("sys").stderr,
+                )
+                cases = []
+            result[task] = {"cases": cases}
+        else:
+            result[task] = {"cases": []}
+    return result
+
+
+def acquire_task_outputs(
+    force_rebuild: bool,
+    case_root: Path | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Build cases or load from output/seven_task_validation if present.
+
+    If case_root is provided, load per-task cases.json files from that directory
+    (produced by scripts/export_depth_benchmark.py) and ignore force_rebuild.
+    """
+    if case_root is not None:
+        return _load_from_case_root(case_root)
+
     if not force_rebuild:
         all_path = EXPORT_ROOT / "all_cases.json"
         if all_path.is_file():
@@ -534,7 +574,10 @@ def run_benchmark(args: argparse.Namespace) -> int:
     out_dir = Path(args.out_dir) if args.out_dir else DEFAULT_OUT_BASE / f"run_{slug}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    task_outputs = acquire_task_outputs(force_rebuild=args.force_rebuild)
+    task_outputs = acquire_task_outputs(
+        force_rebuild=args.force_rebuild,
+        case_root=getattr(args, "case_root", None),
+    )
     cases, counts_by_task = select_cases(task_outputs, tasks, args.max_cases_per_task)
     if not cases:
         raise SystemExit("No cases selected for benchmark run.")
