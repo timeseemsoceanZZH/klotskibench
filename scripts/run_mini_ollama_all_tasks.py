@@ -375,6 +375,8 @@ PROMPT_LEAKAGE_TERMS = (
     "shortest_solution_actions",
 )
 
+PROMPT_MODES: frozenset[str] = frozenset({"zero_shot_rules_v3", "one_shot_rules_v3"})
+
 
 def build_ollama_options(
     temperature: float = 0.0,
@@ -477,6 +479,24 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
             "for each task. Overrides --force-rebuild and the default all_cases.json path."
         ),
     )
+    parser.add_argument(
+        "--prompt-mode",
+        dest="prompt_mode",
+        default="zero_shot_rules_v3",
+        choices=sorted(PROMPT_MODES),
+        help="Prompt strategy (default: zero_shot_rules_v3).",
+    )
+    parser.add_argument(
+        "--exemplar-root",
+        dest="exemplar_root",
+        type=Path,
+        default=None,
+        help=(
+            "Directory containing one-shot exemplars produced by "
+            "scripts/export_one_shot_exemplars.py. "
+            "Required when --prompt-mode one_shot_rules_v3 is used."
+        ),
+    )
 
 
 def parse_runner_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -496,6 +516,48 @@ def build_prompt(case: dict[str, Any]) -> str:
         f"{TASK_INSTRUCTIONS[task]}\n\n"
         "Respond with JSON only (no markdown fences, no commentary).\n"
         f"Required output schema: {OUTPUT_SCHEMAS[task]}\n\n"
+        f"Input JSON:\n{payload}\n"
+    )
+
+
+def load_exemplars(exemplar_root: Path) -> dict[str, dict[str, Any]]:
+    """Load per-task one-shot exemplar files from exemplar_root/<task>/case.json."""
+    result: dict[str, dict[str, Any]] = {}
+    for task in ALL_TASKS:
+        path = exemplar_root / task / "case.json"
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"One-shot exemplar not found: {path}\n"
+                f"Run: python scripts/export_one_shot_exemplars.py --out-dir {exemplar_root}"
+            )
+        result[task] = json.loads(path.read_text(encoding="utf-8"))
+    return result
+
+
+def build_one_shot_prompt(case: dict[str, Any], exemplar: dict[str, Any]) -> str:
+    """Build a one-shot prompt by prepending a fixed task exemplar to the zero-shot prompt."""
+    task = str(case["task"])
+    payload = json.dumps(jsonable(case.get("input", {})), ensure_ascii=False, indent=2)
+    ex_input = json.dumps(jsonable(exemplar.get("input", {})), ensure_ascii=False, indent=2)
+    ex_output = json.dumps(
+        jsonable(exemplar.get("exemplar_output", {})), ensure_ascii=False, indent=2
+    )
+    description = exemplar.get("description", "")
+    example_block = (
+        "--- Example ---\n"
+        f"{description}\n"
+        f"Input JSON:\n{ex_input}\n\n"
+        f"Output:\n{ex_output}\n"
+        "--- End of Example ---"
+    )
+    return (
+        f"You are solving Klotski-Bench task {task.upper()} ({TASK_NAMES[task]}).\n\n"
+        f"{KLOTSKI_RULES}\n\n"
+        f"{TASK_INSTRUCTIONS[task]}\n\n"
+        "Respond with JSON only (no markdown fences, no commentary).\n"
+        f"Required output schema: {OUTPUT_SCHEMAS[task]}\n\n"
+        f"{example_block}\n\n"
+        "Now solve the following test case. Output only the final JSON object.\n\n"
         f"Input JSON:\n{payload}\n"
     )
 
@@ -570,6 +632,19 @@ def run_benchmark(args: argparse.Namespace) -> int:
         if t not in ALL_TASKS:
             raise SystemExit(f"Unknown task: {t!r}; expected one of {ALL_TASKS}")
 
+    prompt_mode: str = getattr(args, "prompt_mode", "zero_shot_rules_v3")
+    exemplar_root: Path | None = getattr(args, "exemplar_root", None)
+
+    if prompt_mode == "one_shot_rules_v3":
+        if exemplar_root is None:
+            raise SystemExit(
+                "Error: --exemplar-root is required when --prompt-mode one_shot_rules_v3 is used.\n"
+                "Run: python scripts/export_one_shot_exemplars.py --out-dir <exemplar-root>"
+            )
+        exemplars = load_exemplars(exemplar_root)
+    else:
+        exemplars = {}
+
     slug = model_slug(args.model)
     out_dir = Path(args.out_dir) if args.out_dir else DEFAULT_OUT_BASE / f"run_{slug}"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -595,7 +670,10 @@ def run_benchmark(args: argparse.Namespace) -> int:
     for index, case in enumerate(cases):
         task = str(case["task"])
         case_id = case.get("case_id", f"{task}_{index}")
-        prompt = build_prompt(case)
+        if prompt_mode == "one_shot_rules_v3":
+            prompt = build_one_shot_prompt(case, exemplars[task])
+        else:
+            prompt = build_prompt(case)
 
         if args.dry_run:
             raw = dry_run_raw_response(task)
@@ -696,6 +774,9 @@ def run_benchmark(args: argparse.Namespace) -> int:
         "force_rebuild_cases": args.force_rebuild,
         "max_cases_per_task": args.max_cases_per_task,
         "sleep_seconds": args.sleep,
+        "prompt_mode": prompt_mode,
+        "exemplar_root": str(exemplar_root) if exemplar_root is not None else None,
+        "num_shots": 1 if prompt_mode == "one_shot_rules_v3" else 0,
         **decoding_settings,
     })
     write_json(f"main_task_table_{slug}.json", table_rows)
